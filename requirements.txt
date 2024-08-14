@@ -1,0 +1,10 @@
+pyinstaller
+python-dotenv
+langchain
+langgraph
+langchain_experimental
+langchain_openai
+langchain-google-vertexai==1.0.8
+beautifulsoup4
+pandas
+faiss-cpu

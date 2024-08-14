@@ -87,7 +87,7 @@ def agent_node(state, agent, name):
 
 def build_supervisor(llm, members_mapping: Dict[str, Any]):
     members_names = list(members_mapping.keys())
-    print(f"members_names: {members_names}")
+    # print(f"members_names: {members_names}")
     supervisor_agent = create_supervisor_agent(llm, members_names)
 
     workflow = create_workflow()

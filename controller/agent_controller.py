@@ -26,11 +26,20 @@ members = {
 
 supervisor = build_supervisor(llm, members)
 
-user_inputs = {"messages": [HumanMessage(content="帮我写一个查询所有员工的SQL语句")]}
-
+def output_welcome():
+    welcomeText = '''
+    ****************************************
+        Welcome to use the Agent Gallery!  
+    ****************************************
+    '''
+    print(welcomeText)
 
 def execute_agent():
-    for s in supervisor.stream(user_inputs):
+    output_welcome()
+    user_input = input("First please tell me what you want to do: ")
+    # user_inputs = {"messages": [HumanMessage(content="帮我写一个查询所有员工的SQL语句")]}
+    inputContent = {"messages": [HumanMessage(content=user_input)]}
+    for s in supervisor.stream(inputContent):
         if "__end__" not in s:
             print(s)
             print("----")

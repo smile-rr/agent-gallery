@@ -21,6 +21,11 @@ members = {
         "llm": llm,
         "tools": [],
         "prompt": "You are a SQL generator."
+    },
+    "TextRecognitionAssistant": {
+        "llm": llm,
+        "tools": [],
+        "prompt": "You are an image text recognition assistant, you can get the raw text from given immage. The recognized text needs to be exactly the same as the text in the image."
     }
 }
 
@@ -36,8 +41,9 @@ def output_welcome():
 
 def execute_agent():
     output_welcome()
+    
     user_input = input("First please tell me what you want to do: ")
-    # user_inputs = {"messages": [HumanMessage(content="帮我写一个查询所有员工的SQL语句")]}
+
     inputContent = {"messages": [HumanMessage(content=user_input)]}
     for s in supervisor.stream(inputContent):
         if "__end__" not in s:

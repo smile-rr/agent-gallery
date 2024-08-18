@@ -1,1 +1,5 @@
-.env
+.env.local
+venv/
+.idea/
+.vscode/
+.DS_Store

@@ -8,3 +8,10 @@ langchain-google-vertexai==1.0.8
 beautifulsoup4
 pandas
 faiss-cpu
+vertexai
+
+Pillow
+rich
+matplotlib
+emoji
+absl-py

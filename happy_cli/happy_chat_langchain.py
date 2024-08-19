@@ -5,6 +5,7 @@ from rich import print
 from rich.spinner import Spinner
 from rich.live import Live
 from rich.console import Console
+from langchain.chains import ConversationChain
 from langchain_google_vertexai import ChatVertexAI
 from langchain_community.document_loaders import WebBaseLoader
 from langchain_text_splitters.character import RecursiveCharacterTextSplitter
@@ -12,6 +13,7 @@ from langchain_google_vertexai import VertexAIEmbeddings
 from langchain_community.vectorstores.faiss import FAISS
 from langchain.chains.retrieval_qa.base import RetrievalQA
 from langchain_core.prompts.prompt import PromptTemplate
+import requests
 
 # Define colors for the chatbot and user
 CHATBOT_COLOR = "green"
@@ -33,111 +35,222 @@ class HappyChat:
             temperature=0,
             max_output_tokens=256,
             top_p=0.8,
-            top_k=40
+            top_k=40,
+            max_retries=3,
         )
+        # Initialize conversation chain
+        self.conversation = ConversationChain(llm=self.chat, verbose=False)
+        # Confluence API configuration
+        self.confluence_base_url = os.getenv("CONFLUENCE_BASE_URL")
+        self.confluence_username = os.getenv("CONFLUENCE_USERNAME")
+        self.confluence_api_token = os.getenv("CONFLUENCE_API_TOKEN")
 
     def get_user_input(self, prompt: str) -> str:
         """Prompts the user for input and returns the input in blue color."""
         user_input = console.input(f"[{USER_COLOR}]{prompt}")
-
-        # # Check if the input contains a URL
-        # url_match = re.search(r"(https?://[^\s]+)", user_input)
-        # if url_match:
-        #     url = url_match.group(1)
-        #     # Call the method to get a response based on the URL content
-        #     return self.get_response_based_on_url(url, user_input)
-
         return user_input
 
     def format_message(self, name: str, message: str, color: str) -> str:
         """Formats the message with the name and color."""
-        # Remove the newline before the message to reduce spacing
         return f"\n[{color}]{name}:[/] {message}"
 
-    def get_chat_response(self, messages: list) -> str:
+    def get_chat_response(self, message: str) -> str:
         """Gets the chat response from the chatbot."""
         with Live(Spinner("pong"), transient=True, refresh_per_second=10):
             try:
-                response = self.chat.invoke(messages)
-                return response.content
+                response = self.conversation.predict(input=message)
+                return response
             except Exception as e:
                 console.print(f"[red]Error: {e}")
                 return "Oops! Something went wrong. Please try again."
 
-    def get_response_based_on_url(self, url: str, user_input: str) -> str:
-        """Fetches content from a given URL using WebBaseLoader, extracts key information, and generates a response based on that content."""
+    def search_confluence(self, keywords: list) -> list:
+        """Searches Confluence for pages containing the given keywords."""
+        headers = {
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+        }
+        auth = (self.confluence_username, self.confluence_api_token)
+        query_params = {
+            "cql": "title ~ ('" + "' OR '".join(keywords) + "')"
+        }
+
+        response = requests.get(
+            f"{self.confluence_base_url}/rest/api/content/search",
+            headers=headers,
+            auth=auth,
+            params=query_params,
+        )
+
+        if response.status_code == 200:
+            data = response.json()
+            return [item["_links"]["base"] + item["_links"]["webui"] for item in data["results"]]
+        else:
+            console.print(f"[red]Failed to search Confluence: {response.status_code}")
+            return []
+
+    def load_and_split_documents(self, url: str) -> list:
+        """Loads content from a URL, splits it into chunks, and returns the documents."""
+        loader = WebBaseLoader(url)
+        data = loader.load()
+
+        text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=0)
+        docs = text_splitter.split_documents(data)
+
+        return docs
+
+    def create_vector_store(self, docs: list) -> FAISS:
+        """Creates a vector store from the provided documents."""
+        embeddings = VertexAIEmbeddings()
+        db = FAISS.from_documents(docs, embeddings)
+        return db
+
+    def generate_answer(self, db: FAISS, user_input: str) -> str:
+        """Generates an answer using the provided vector store and user input."""
+        qa = RetrievalQA.from_chain_type(
+            llm=self.chat,
+            chain_type="map_reduce",
+            retriever=db.as_retriever(),
+            return_source_documents=True,
+            chain_type_kwargs={
+                "prompt": PromptTemplate(
+                    template="Context:\n{context}\n\nQuestion: {question}\n\nAnswer:",
+                    input_variables=["context", "question"],
+                )
+            }
+        )
+
+        result = qa({"query": user_input})
+
+        answer = result["result"]
+        source_docs = result["source_documents"]
+
+        # Format the answer and sources
+        formatted_answer = f"{answer}\n\nSources:"
+        for doc in source_docs:
+            formatted_answer += f"\n- {doc.metadata['source']}"
+
+        return formatted_answer
+
+    def suggest_keywords(self, user_input: str) -> list:
+        """Asks the AI model to suggest keywords based on the user's input in JSON format."""
+        # Prepare the prompt to ask for keywords in JSON format
+        prompt_template = PromptTemplate(
+            template="Suggest up to 5 keywords for the following query: '{query}'. Respond in JSON format: {{'keywords': ['keyword1', 'keyword2']}}.",
+            input_variables=["query"]
+        )
+
+        # Format the prompt with the user's input
+        prompt = prompt_template.format(query=user_input)
+
+        # Get the AI model's response
+        response = self.get_chat_response(prompt)
+
+        # Parse the JSON response
+        keywords = self.parse_keywords_from_json_response(response)
+
+        return keywords
+
+    def parse_keywords_from_json_response(self, json_response: str) -> list:
+        """Parses the JSON response from the AI model and returns a list of keywords."""
+        import json
+
         try:
-            # Load the content from the URL
-            loader = WebBaseLoader(url)
-            data = loader.load()
+            # Parse the JSON response
+            data = json.loads(json_response)
+            keywords = data.get('keywords', [])
+            return keywords
+        except json.JSONDecodeError:
+            console.print("[red]Invalid JSON response from the AI model.")
+            return []
 
-            # Split the text into chunks
-            text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=0)
-            docs = text_splitter.split_documents(data)
-
-            # Create embeddings for the documents
-            embeddings = VertexAIEmbeddings()
-
-            # Create a vector store from the documents
-            db = FAISS.from_documents(docs, embeddings)
-
-            # Create a RetrievalQA chain
-            qa = RetrievalQA.from_chain_type(
-                llm=self.chat,
-                chain_type="stuff",
-                retriever=db.as_retriever(),
-                return_source_documents=True,
-                chain_type_kwargs={
-                    "prompt": PromptTemplate(
-                        template="Context:\n{context}\n\nQuestion: {question}\n\nAnswer:",
-                        input_variables=["context", "question"],
-                    )
-                }
-            )
-
-            # Get the answer from the chain
-            result = qa({"query": user_input})
-
-            # Extract the answer and source documents
-            answer = result["result"]
-            source_docs = result["source_documents"]
-
-            # Format the answer and sources
-            formatted_answer = f"{answer}\n\nSources:"
-            for doc in source_docs:
-                formatted_answer += f"\n- {doc.metadata['source']}"
-
-            return formatted_answer
-        except Exception as e:
-            console.print(f"[red]An error occurred: {e}")
-            return "Oops! Something went wrong. Please try again."
+    def extract_keywords_from_ai_response(self, ai_response: str) -> list:
+        """Extracts keywords from the AI model's response."""
+        # Split the response by commas or line breaks to get individual keywords
+        keywords = re.split(r'[,\n]+', ai_response)
+        # Clean up the keywords
+        cleaned_keywords = [keyword.strip().lower() for keyword in keywords if keyword.strip()]
+        return cleaned_keywords
 
     def run(self):
         """Starts the chat loop."""
         # Initial greeting from Vertex AI
-        initial_system_prompt = """
-        You are a chat assistant named as 'Happy'. from next input you will get the chat message from user. 
-        Firstly give a cool welcome message to user to start the interesting conversation. Please be brief.
-        """
-        
-        # Send the system message
-        initial_response = self.get_chat_response([("human",initial_system_prompt)])
+        self.display_initial_greeting()
 
-        # Print the initial response if needed
-        console.print(self.format_message("Happy", initial_response, CHATBOT_COLOR))
-        
-        try:    
+        try:
             # Continuously prompt the user for input
             while True:
                 user_input = self.get_user_input("You: ")
                 if user_input.lower() in ["exit", "quit"]:
                     console.print("\n[red]Bye bye...")
                     break
-                # Send the user input as a human message
-                response = self.get_chat_response([("human",user_input)])
-                console.print(self.format_message("Happy", response, CHATBOT_COLOR))
+                elif user_input.lower() in ["cls", "clear"]:
+                    # Clear the console
+                    self.clear_console()
+                else:
+                    # Process the user input
+                    self.process_user_input(user_input)
         except KeyboardInterrupt:
             console.print("\n\n[red]Bye bye ...")
+
+    def display_initial_greeting(self):
+        """Displays the initial greeting message."""
+        initial_system_prompt = """
+        You are a chat assistant named as 'Happy'. from next input you will get the chat message from user. 
+        Firstly give a cool welcome message to user to start the interesting conversation. Please be brief.
+        """
+        
+        # Send the system message
+        initial_response = self.get_chat_response(initial_system_prompt)
+
+        # Print the initial response if needed
+        console.print(self.format_message("Happy", initial_response, CHATBOT_COLOR))
+
+    def clear_console(self):
+        """Clears the console."""
+        os.system('cls' if os.name == 'nt' else 'clear')
+
+    def process_user_input(self, user_input: str):
+        """Processes the user input and generates a response."""
+        if "confluence" in user_input.lower():
+            # Send the user input as a human message
+            response = self.get_response_based_on_confluence_search(user_input)
+        else:
+            # Send the user input as a human message
+            response = self.get_chat_response(user_input)
+        console.print(self.format_message("Happy", response, CHATBOT_COLOR))
+
+    def get_response_based_on_confluence_search(self, user_input: str) -> str:
+        """Searches Confluence, loads content from the found pages, and generates a response."""
+        # Ask the AI model to suggest keywords
+        suggested_keywords = self.suggest_keywords(user_input)
+
+        # Search Confluence using the suggested keywords
+        urls = self.search_confluence(suggested_keywords)
+
+        if not urls:
+            return "No relevant pages found in Confluence."
+
+        responses = []
+        for url in urls:
+            # Load and split documents from each URL
+            docs = self.load_and_split_documents(url)
+
+            # Create a vector store
+            db = self.create_vector_store(docs)
+
+            # Generate an answer using the vector store
+            answer = self.generate_answer(db, user_input)
+
+            # Add the answer to the list of responses
+            responses.append(answer)
+
+        # Combine all answers into a single response
+        combined_response = "\n\n".join(responses)
+
+        return combined_response
+
+    # ... (rest of the code remains unchanged)
 
 if __name__ == "__main__":
     load_dotenv(".env.local")

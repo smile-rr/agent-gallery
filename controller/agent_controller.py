@@ -27,14 +27,14 @@ def sql_generator_agent(human_input: str):
         [
             SystemMessage(
                 content=(
-                    "You are a sql generator"
+                    "You are a sql generator,"
+                    "Return the answer directly without explanation, like 'SELECT * FROM student;'"
                 )
             ),
             HumanMessage(content=human_input)
         ]
     )
     messages = prompt.format_messages()
-    print("sql generator messages: ", messages)
     return llm.invoke(messages)
 
 

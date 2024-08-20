@@ -8,6 +8,7 @@ from rich.live import Live
 from rich.console import Console
 from langchain_core.chat_history import InMemoryChatMessageHistory
 from langchain_core.runnables.history import RunnableWithMessageHistory
+from langchain_core.runnables import RunnableLambda
 from langchain_google_vertexai import ChatVertexAI
 from langchain_community.document_loaders import WebBaseLoader
 from langchain_text_splitters.character import RecursiveCharacterTextSplitter
@@ -15,7 +16,11 @@ from langchain_google_vertexai import VertexAIEmbeddings
 from langchain_community.vectorstores.faiss import FAISS
 from langchain.chains.retrieval_qa.base import RetrievalQA
 from langchain_core.prompts.prompt import PromptTemplate
+from langchain_core.messages import HumanMessage
+from typing import List, Dict, Any
 import requests
+
+from confluence_client import FUNCTION_DESCRIPTIONS, ConfluenceClient, ConfluenceSearchInput, ConfluenceSearchOutput
 
 CHATBOT_COLOR = "green"
 USER_COLOR = "blue"
@@ -75,38 +80,6 @@ class KeywordSuggester:
             return []
 
 
-class ConfluenceSearcher:
-    def __init__(self, base_url, username, api_token):
-        self.base_url = base_url
-        self.username = username
-        self.api_token = api_token
-
-    def search_confluence(self, keywords: list) -> list:
-        """Searches Confluence for pages containing the given keywords."""
-        headers = {
-            "Accept": "application/json",
-            "Content-Type": "application/json",
-        }
-        auth = (self.username, self.api_token)
-        query_params = {
-            "cql": "title ~ ('" + "' OR '".join(keywords) + "')"
-        }
-
-        response = requests.get(
-            f"{self.base_url}/rest/api/content/search",
-            headers=headers,
-            auth=auth,
-            params=query_params,
-        )
-
-        if response.status_code == 200:
-            data = response.json()
-            return [item["_links"]["base"] + item["_links"]["webui"] for item in data["results"]]
-        else:
-            console.print(f"[red]Failed to search Confluence: {response.status_code}")
-            return []
-
-
 class DocumentProcessor:
     def __init__(self, chatbot):
         self.chatbot = chatbot
@@ -130,7 +103,7 @@ class DocumentProcessor:
     def generate_answer(self, db: FAISS, user_input: str) -> str:
         """Generates an answer using the provided vector store and user input."""
         qa = RetrievalQA.from_chain_type(
-            llm=self.chatbot.chat,
+            llm=self.chatbot.vertex_ai,
             chain_type="map_reduce",
             retriever=db.as_retriever(),
             return_source_documents=True,
@@ -161,7 +134,10 @@ class HappyChat:
         project_id = os.getenv("PROJECT_ID")
         location = os.getenv("LOCATION")
         model_name = os.getenv("MODEL_NAME")
-        self.chat = ChatVertexAI(
+        self.confluence_search_function = RunnableLambda(
+            lambda keywords: self.confluence_client.search(keywords)
+        )
+        self.vertex_ai = ChatVertexAI(
             model_name=model_name,
             project=project_id,
             location=location,
@@ -170,20 +146,16 @@ class HappyChat:
             top_p=0.8,
             top_k=40,
             max_retries=3,
+            function_descriptions=FUNCTION_DESCRIPTIONS,
         )
         # Initialize conversation chain
         self.conversation = RunnableWithMessageHistory(
-            self.chat,
+            self.vertex_ai,
             get_session_history=self.get_session_history,
             verbose=False
         )
-        # Confluence API configuration
-        self.confluence_base_url = os.getenv("CONFLUENCE_BASE_URL")
-        self.confluence_username = os.getenv("CONFLUENCE_USERNAME")
-        self.confluence_api_token = os.getenv("CONFLUENCE_API_TOKEN")
-
+        self.confluence_client= ConfluenceClient()
         self.keyword_suggester = KeywordSuggester(self)
-        self.confluence_searcher = ConfluenceSearcher(self.confluence_base_url, self.confluence_username, self.confluence_api_token)
         self.document_processor = DocumentProcessor(self)
         self.console_manager = ConsoleManager()
         self.store = {}  # memory is maintained outside the chain
@@ -194,16 +166,22 @@ class HappyChat:
             self.store[session_id] = InMemoryChatMessageHistory()
         return self.store[session_id]
 
-    def get_chat_response(self, message: str) -> str:
-        """Gets the chat response from the chatbot."""
-        with Live(Spinner("pong"), transient=True, refresh_per_second=10):
-            try:
-                response = self.conversation.invoke(input=message, config={"configurable": {"session_id": "1"}},)
-                return response.content
-            except Exception as e:
-                console.print(f"[red]Error: {e}")
-                return "Oops! Something went wrong. Please try again."
-
+    def get_chat_response(self, messages: List[Dict[str, str]]) -> Dict[str, Any]:
+        response = self.vertex_ai.invoke(messages)
+        if "function_call" in response:
+            # Handle function call
+            function_name = response["function_call"]["name"]
+            function_args = json.loads(response["function_call"]["arguments"])
+            # Call the corresponding function
+            function_result = self.call_function(function_name, function_args)
+            # Invoke the model again with the function result
+            final_response = self.vertex_ai.get_chat_response([
+                {"role": "function", "content": f"{{'function_name': '{function_name}', 'result': {json.dumps(function_result)}}}"},
+                *messages
+            ])
+            return final_response
+        else:
+            return response
     def display_initial_greeting(self):
         """Displays the initial greeting message."""
         initial_system_prompt = """
@@ -238,23 +216,35 @@ class HappyChat:
         except KeyboardInterrupt:
             console.print("\n\n[red]Bye bye ...")
 
-    def process_user_input(self, user_input: str):
-        """Processes the user input and generates a response."""
-        if "confluence" in user_input.lower():
-            # Send the user input as a human message
-            response = self.get_response_based_on_confluence_search(user_input)
+    def process_user_input(self, user_input: str) -> None:
+        response = self.invoke(user_input)
+        print("Response:", response)
+        if "function_call" in response:
+            print("Function call:", response["function_call"])
         else:
-            # Send the user input as a human message
-            response = self.get_chat_response(user_input)
-        console.print(self.console_manager.format_message("Happy", response, CHATBOT_COLOR))
+            print("Message:", response.content)
+    def invoke(self, message: str):
+        response = self.vertex_ai.invoke(message)
+        if "function_call" in response:
+            # Handle function call
+            function_name = response["function_call"]["name"]
+            function_args = json.loads(response["function_call"]["arguments"])
+            # Call the corresponding function
+            function_result = self.call_function(function_name, function_args)
+            # Invoke the model again with the function result
+            final_response = self.vertex_ai.invoke(f"{{'function_name': '{function_name}', 'result': {json.dumps(function_result)}}}")
+            return final_response
+        else:
+            return response
 
     def get_response_based_on_confluence_search(self, user_input: str) -> str:
         """Searches Confluence, loads content from the found pages, and generates a response."""
         # Ask the AI model to suggest keywords
         suggested_keywords = self.keyword_suggester.suggest_keywords(user_input)
+        console.print(self.console_manager.format_message("Happy", f"Keywords: {suggested_keywords}", CHATBOT_COLOR))
 
         # Search Confluence using the suggested keywords
-        confluence_urls = self.confluence_searcher.search_confluence(suggested_keywords)
+        confluence_urls = self.confluence_client.search_by_title_and_content(suggested_keywords)
 
         if not confluence_urls:
             return "No relevant Confluence pages found. Let's continue our conversation."

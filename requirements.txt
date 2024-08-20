@@ -17,3 +17,4 @@ emoji
 absl-py
 langchain_text_splitters
 langchain_community
+google-cloud-aiplatform

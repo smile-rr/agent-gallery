@@ -2,9 +2,9 @@ import functools
 import operator
 from langchain.agents import AgentExecutor, create_tool_calling_agent
 from langchain.output_parsers.openai_functions import JsonOutputFunctionsParser
-from langchain_core.messages import HumanMessage, BaseMessage
+from langchain_core.messages import HumanMessage, BaseMessage, SystemMessage
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
-from langgraph.graph import END
+from langgraph.graph import END, MessagesState
 from langgraph.graph import StateGraph
 from typing import TypedDict, Annotated, Sequence, Dict, Any
 
@@ -19,13 +19,6 @@ def create_workflow():
 
 
 def create_supervisor_agent(llm, members):
-    system_prompt = (
-        "You are a controller tasked with managing a conversation between the"
-        " following workers:  {members}. Given the following user request,"
-        " respond with the worker to act next. Each worker will perform a"
-        " task and respond with their results and status. When finished,"
-        " respond with FINISH."
-    )
     options = ["FINISH"] + members
     function_def = {
         "name": "route",
@@ -36,29 +29,36 @@ def create_supervisor_agent(llm, members):
             "properties": {
                 "next": {
                     "title": "Next",
-                    "anyOf": [
-                        {"enum": options},
-                    ],
+                    # "anyOf": [
+                    #     {"enum": options},
+                    # ],
                 }
             },
             "required": ["next"],
         },
     }
+
+    system_prompt = (
+        " You are a controller tasked with managing a conversation between the"
+        " following workers:  {members}. Given the following user request,"
+        " respond with the worker to act next. Each worker will perform a"
+        " task and respond with their results and status. When finished,"
+        " respond with FINISH."
+        " If the user asks you any questions, please analyze the context of the conversation carefully."
+        " who should act next?"
+        " Or should we FINISH? Select one of: {options}",
+    )
+
     prompt = ChatPromptTemplate.from_messages(
         [
-            ("system", system_prompt),
+            [("system", system_prompt)],
             MessagesPlaceholder(variable_name="messages"),
-            (
-                "system",
-                "Given the conversation above, who should act next?"
-                " Or should we FINISH? Select one of: {options}",
-            ),
         ]
     ).partial(options=str(options), members=", ".join(members))
 
     supervisor_chain = (
             prompt
-            | llm.bind_functions(functions=[function_def], function_call="route")
+            | llm.bind_tools(tools=[function_def])
             | JsonOutputFunctionsParser()
     )
     return supervisor_chain
@@ -80,9 +80,9 @@ def create_agent(llm, tools: list, system_prompt: str):
     return executor
 
 
-def agent_node(state, agent, name):
+def agent_node(state: MessagesState, agent, name):
     result = agent.invoke(state)
-    return {"messages": [HumanMessage(content=result["output"], name=name)]}
+    return {"messages": [SystemMessage(content=""), HumanMessage(content=result["output"], name=name)]}
 
 
 def build_supervisor(llm, members_mapping: Dict[str, Any]):

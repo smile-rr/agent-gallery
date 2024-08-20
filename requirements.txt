@@ -4,6 +4,7 @@ langchain
 langgraph
 langchain_experimental
 langchain_openai
+google-cloud-aiplatform==1.62.0
 langchain-google-vertexai==1.0.8
 beautifulsoup4
 pandas

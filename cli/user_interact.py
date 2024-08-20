@@ -34,7 +34,7 @@ if __name__ == '__main__':
             ai_message = """I am an agent gallery provided the following agent for you:
     1. Sql generator
     2. Coolest city
-Please enter your needs directly.
+Please type in your needs directly.
 I will automatically recognize your intention.
 And help you complete the task.
                          """

@@ -6,6 +6,8 @@ from rich.live import Live
 import vertexai
 from langchain_core.messages import HumanMessage
 from vertexai.generative_models import GenerativeModel, ChatSession, Part, Image
+from tkinter import filedialog
+import time 
 
 load_dotenv(".env.local")
 
@@ -48,19 +50,35 @@ def print_markdown_response_with_spinner(prompt: str) -> str:
     # Convert the response to Markdown and return it as a string
     return response
 
-def checkUserInputAndGetText(input: str) -> str:
-    with Live(Spinner("pong"), transient=True, refresh_per_second=10):
-        prompt = """"
-        Please check if the user input is a local path or a url format. If not let user input again or only return 'check pass' string. 
-        User Input: 
-        """
-        prompt = prompt + input
-        response = get_chat_response(chat, prompt)
-    return response
+# def checkUserInputAndGetText(input: str) -> str:
+#     with Live(Spinner("pong"), transient=True, refresh_per_second=10):
+#         prompt = """"
+#         Please check if the user input is a local path or a url format. If not let user input again or only return 'check pass' string. 
+#         User Input: 
+#         """
+#         prompt = prompt + input
+#         response = get_chat_response(chat, prompt)
+#     return response
 
-def textExtractionAssistant(input: str) -> str:
+# def textExtractionAssistant(input: str) -> str:
+
+#     prompt = "You are an image text recognition assistant, you can get the raw text from given immage. The recognized text needs to be exactly the same as the text in the image."
+
+#     image_file = Part.from_image(Image.load_from_file(input))
+#     contents = [image_file, prompt]
+#     response = model.generate_content(contents)
+#     return response.text
+
+# key agent method
+def snapReader() -> str:
+    print(format_message("SnapReader", "Next please select an image.", CHATBOT_COLOR))
+    time.sleep(2)
     prompt = "You are an image text recognition assistant, you can get the raw text from given immage. The recognized text needs to be exactly the same as the text in the image."
-    image_file = Part.from_image(Image.load_from_file(input))
+    file_path = filedialog.askopenfilename(
+        filetypes=[("Image Files", "*.png;*.jpg;*.jpeg;*.bmp")]
+    )
+    print(format_message("SnapReader", "your file path: " + file_path, CHATBOT_COLOR))
+    image_file = Part.from_image(Image.load_from_file(file_path))
     contents = [image_file, prompt]
     response = model.generate_content(contents)
     return response.text
@@ -77,15 +95,15 @@ initial_response = print_markdown_response_with_spinner(initial_prompt)
 print(format_message("Happy", initial_response, CHATBOT_COLOR))
 
 # Continuously prompt the user for input
-while True:
-    user_input = get_user_input("You: ")
-    if user_input.lower() in ["exit", "quit"]:
-        break
-    response = checkUserInputAndGetText(user_input)
-    if 'check pass' in response :
-        response = textExtractionAssistant(user_input)
-        print(format_message("Test Content", "\n" + response, CHATBOT_COLOR))
-        break
+# while True:
+    # user_input = get_user_input("You: ")
+    # if user_input.lower() in ["exit", "quit"]:
+    #     break
+    # response = checkUserInputAndGetText(user_input)
+    # if 'check pass' in response :
+    #     response = textExtractionAssistant(user_input)
+    #     print(format_message("Test Content", "\n" + response, CHATBOT_COLOR))
+    #     break
     # print(format_message("You", user_input, USER_COLOR))
-    print(format_message("Happy", response, CHATBOT_COLOR))
-    
+response = snapReader()
+print(format_message("Happy", response, CHATBOT_COLOR))

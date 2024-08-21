@@ -4,7 +4,16 @@ langchain
 langgraph
 langchain_experimental
 langchain_openai
-langchain-google-vertexai==1.0.8
+google-cloud-aiplatform
+langchain-google-vertexai
 beautifulsoup4
 pandas
 faiss-cpu
+
+Pillow
+rich
+matplotlib
+emoji
+absl-py
+langchain_text_splitters
+langchain_community

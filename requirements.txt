@@ -5,6 +5,7 @@ langgraph
 langchain_experimental
 langchain_openai
 langchain-google-vertexai==1.0.8
+langchain_google_community
 beautifulsoup4
 pandas
 faiss-cpu

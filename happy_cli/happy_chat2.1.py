@@ -17,8 +17,22 @@ from langchain_community.vectorstores.faiss import FAISS
 from langchain.chains.retrieval_qa.base import RetrievalQA
 from langchain_core.prompts.prompt import PromptTemplate
 from langchain_core.messages import HumanMessage
-from typing import List, Dict, Any
+from langchain.chains import RetrievalQA
+from langchain.chains import RetrievalQAWithSourcesChain
+from langchain.chains import ConversationalRetrievalChain
+from langchain.memory import ConversationBufferMemory
+from langchain.prompts import PromptTemplate
+from langchain.agents import AgentExecutor, create_react_agent, create_structured_chat_agent
 from langchain.docstore.document import Document
+
+from langchain_google_vertexai import VertexAI
+from langchain_google_community import VertexAISearchRetriever
+from langchain_google_community import VertexAIMultiTurnSearchRetriever
+from langchain_core.tools import Tool, StructuredTool
+from langchain_core.messages import SystemMessage, HumanMessage
+from langchain_core.prompts import PromptTemplate, ChatPromptTemplate
+from langchain_core.prompts.chat import MessagesPlaceholder, SystemMessagePromptTemplate, HumanMessagePromptTemplate
+from typing import List, Dict, Any
 import requests
 
 from confluence_client import FUNCTION_DESCRIPTIONS, ConfluenceClient, ConfluenceSearchInput, ConfluenceSearchOutput
@@ -47,20 +61,11 @@ class KeywordSuggester:
     def __init__(self, chatbot):
         self.chatbot = chatbot
 
-    def suggest_keywords(self, user_input: str) -> List[str]:
+    def suggest_keywords(self, user_input: str) -> list:
         """Asks the AI model to suggest keywords based on the user's input in JSON format."""
         # Prepare the prompt to ask for keywords in JSON format
         prompt_template = PromptTemplate(
-            template="""HUMAN is going to search in Confluence for useful information. 
-            You need to help HUMAN to extract keywords for the search query by title or content. 
-            Suggest up to 3 keywords for the following query: '{query}'. 
-            Respond with a comma-separated list of keywords. 
-            For example: google, search, engine. 
-            Do not use any special characters or formatting such as Markdown. 
-            Do not include any other information in the response.
-            Do not include any code format like ```json ```.
-            Keywords should only contain letters and numbers, no special characters.
-            """,
+            template="Suggest up to 5 keywords for the following query: '{query}'. Respond in JSON format: {{'keywords': ['keyword1', 'keyword2']}}.",
             input_variables=["query"]
         )
 
@@ -69,28 +74,21 @@ class KeywordSuggester:
 
         # Get the AI model's response
         response = self.chatbot.get_chat_response(prompt)
-        print(f"[green]Keywords: {response}")
 
-        # Validate and parse the JSON response
-        keywords = self.parse_keywords_from_response(response)
+        # Parse the JSON response
+        keywords = self.parse_keywords_from_json_response(response)
 
-        # Filter out keywords with special characters
-        filtered_keywords = [kw for kw in keywords if re.match(r'^[\w\d]+$', kw)]
+        return keywords
 
-        return filtered_keywords
-
-    def parse_keywords_from_response(self, response: str) -> list:
+    def parse_keywords_from_json_response(self, json_response: str) -> list:
         """Parses the JSON response from the AI model and returns a list of keywords."""
-        """Parses the comma-separated list of keywords from the AI model's response."""
         try:
-            # Split the response into a list of keywords
-            keywords = [keyword.strip() for keyword in response.split(",")]
-            # Filter out keywords with special characters
-            filtered_keywords = [kw for kw in keywords if re.match(r'^[\w\d]+$', kw)]
-            return filtered_keywords
-        except Exception as e:
-            # Handle any unexpected errors
-            print(f"[red]Error parsing keywords: {e}")
+            # Parse the JSON response
+            data = json.loads(json_response)
+            keywords = data.get('keywords', [])
+            return keywords
+        except json.JSONDecodeError:
+            console.print("[red]Invalid JSON response from the AI model.")
             return []
 
 
@@ -98,31 +96,32 @@ class DocumentProcessor:
     def __init__(self, chatbot):
         self.chatbot = chatbot
 
-    def load_and_split_documents(self, content: str) -> List[Document]:
+    def load_and_split_documents(self, contents: List[str]) -> List[Document]:
         """Splits Confluence content into documents.
         
         Args:
-            content (str): A string representing Confluence content.
-            
+            contents (List[str]): A list of strings representing Confluence content.
+        
         Returns:
             List[Document]: A list of processed documents.
         """
         all_docs = []
         text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=0)
 
-        # Split the document
-        docs = text_splitter.split_text(content)
-        
-        # Add metadata (if needed)
-        for i, doc in enumerate(docs):
-            metadata = {
-                "source": f"confluence_{i}",
-                "chunk": i,
-            }
-            docs[i] = Document(page_content=doc, metadata=metadata)
-        
-        # Append to all_docs
-        all_docs.extend(docs)
+        for content in contents:
+            # Split the document
+            docs = text_splitter.split_text(content)
+            
+            # Add metadata (if needed)
+            for i, doc in enumerate(docs):
+                metadata = {
+                    "source": f"confluence_{i}",
+                    "chunk": i,
+                }
+                docs[i] = Document(page_content=doc, metadata=metadata)
+            
+            # Append to all_docs
+            all_docs.extend(docs)
 
         return all_docs
 
@@ -173,11 +172,6 @@ class HappyChat:
             model_name=model_name,
             project=project_id,
             location=location,
-            temperature=0,
-            max_output_tokens=256,
-            top_p=0.8,
-            top_k=40,
-            max_retries=3,
             function_descriptions=FUNCTION_DESCRIPTIONS,
         )
         # Initialize conversation chain
@@ -187,24 +181,30 @@ class HappyChat:
             verbose=False
         )
         self.confluence_client= ConfluenceClient()
-        self.keyword_suggester = KeywordSuggester(self)
         self.document_processor = DocumentProcessor(self)
         self.console_manager = ConsoleManager()
         self.store = {}  # memory is maintained outside the chain
-
     def get_session_history(self, session_id: str) -> InMemoryChatMessageHistory:
         """Returns a new instance of InMemoryChatMessageHistory for the given session ID."""
         if session_id not in self.store:
             self.store[session_id] = InMemoryChatMessageHistory()
         return self.store[session_id]
-    def get_chat_response(self, user_input: str) -> str:
-        with Live(Spinner("pong"), transient=True, refresh_per_second=10):
-            try:
-                response = self.vertex_ai.invoke(user_input)
-                return response.content
-            except Exception as e:
-                console.print(f"[red]Error: {e}")
-                return "Oops! Something went wrong. Please try again."
+    def get_chat_response(self, messages: List[Dict[str, str]]) -> Dict[str, Any]:
+        response = self.vertex_ai.invoke(messages)
+        if "function_call" in response:
+            # Handle function call
+            function_name = response["function_call"]["name"]
+            function_args = json.loads(response["function_call"]["arguments"])
+            # Call the corresponding function
+            function_result = self.call_function(function_name, function_args)
+            # Invoke the model again with the function result
+            final_response = self.vertex_ai.get_chat_response([
+                {"role": "function", "content": f"{{'function_name': '{function_name}', 'result': {json.dumps(function_result)}}}"},
+                *messages
+            ])
+            return final_response
+        else:
+            return response
     def display_initial_greeting(self):
         """Displays the initial greeting message."""
         initial_system_prompt = """
@@ -240,41 +240,56 @@ class HappyChat:
             console.print("\n\n[red]Bye bye ...")
 
     def process_user_input(self, user_input: str) -> None:
-        response = self.get_response_based_on_confluence_search(user_input)
+        response = self.function_call_confluence(user_input)
         print("Response:", response)
+        # Step 1: Load and split documents
+        loaded_documents = self.document_processor.load_and_split_documents(response)
 
-    def get_response_based_on_confluence_search(self, user_input: str) -> str:
-        """Searches Confluence, loads content from the found pages, and generates a response."""
-        # Ask the AI model to suggest keywords
-        suggested_keywords = self.keyword_suggester.suggest_keywords(user_input)
-        print(suggested_keywords)
-        # Ask the AI model to suggest keywords
-        if not suggested_keywords:
-            console.print(self.console_manager.format_message("Happy", "It seems we didn't get any keywords from your question. Let's try again.",CHATBOT_COLOR))
-            return
+        # Step 2: Create a vector store from the loaded documents
+        vector_store = self.document_processor.create_vector_store(loaded_documents)
+
+        # Step 3: Generate an answer using the vector store and user input
+        answer = self.document_processor.generate_answer(vector_store, user_input)
         
-        console.print(self.console_manager.format_message("Happy", f"Keywords: {suggested_keywords}", CHATBOT_COLOR))
+    def function_call_confluence(self, user_input: str):
+        tools = [
+        StructuredTool.from_function(
+            self.confluence_client.search_by_title_and_content,
+            name="search_confluence",
+            description="search confluence content based on keywords list from confluence page title and content"
+        ),
+    ]
 
-        # Search Confluence using the suggested keywords
-        results = self.confluence_client.search_by_title_and_content(suggested_keywords)
+    # Modify the prompt to ask for input parameters
+    prompt = PromptTemplate(
+        template="Suggest the input parameters for the function '{tool_name}' based on the following input: {input}",
+        input_variables=["input", "tool_name"],
+    )
 
-        if not results:
-            return "No relevant Confluence pages found. Let's continue our conversation."
+    agent = create_structured_chat_agent(self.vertex_ai, tools, prompt)
+    agent_executor = AgentExecutor(
+        agent=agent,
+        tools=tools,
+        verbose=True,
+        return_intermediate_steps=True,
+        handle_parsing_errors=True
+    )
 
-        # Load and process the content from the found Confluence pages
-        all_docs = []
-        for result in results:
-            content = result["content"]
-            docs = self.document_processor.load_and_split_documents(content)
-            all_docs.extend(docs)
+    # Invoke the agent executor with the modified prompt
+    result = agent_executor.invoke({"input": user_input})
 
-        # Create a vector store from the loaded documents
-        db = self.document_processor.create_vector_store(all_docs)
+    # Extract the suggested input parameters
+    suggested_input = None
 
-        # Generate an answer based on the user's input and the vector store
-        answer = self.document_processor.generate_answer(db, user_input)
+    # Check the final output for the suggested input parameters
+    output = result.get("output")
+    if output:
+        # Assuming the output format is "{input_parameters}"
+        suggested_input = output.strip().strip('"')
 
-        return answer
+    # Print or use the suggested input parameters
+    print(f"Suggested Input Parameters: {suggested_input}")
+
 
 if __name__ == "__main__":
     load_dotenv(".env.local")

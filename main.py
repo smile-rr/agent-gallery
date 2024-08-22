@@ -79,7 +79,7 @@ if __name__ == '__main__':
 
     display_initial_greeting()
     while True:
-        user_input = get_user_input("You: ")
+        user_input = console_manager.get_user_input("You: ")
         if user_input.lower() in ["exit", "quit"]:
             break
         tool_name, ai_message = call_agent_supervisor(user_input)
@@ -92,6 +92,6 @@ Please type in your needs directly.
 I will automatically recognize your intention.
 And help you complete the task.
                                  """
-        print(format_message(tool_name_mapping[tool_name], "\n" + ai_message, CHATBOT_COLOR))
+        console.print(console_manager.format_message(tool_name_mapping[tool_name], ai_message+"\n", CHATBOT_COLOR))
         # Sleep for 100 milliseconds
         time.sleep(0.1)

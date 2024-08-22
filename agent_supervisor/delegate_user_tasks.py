@@ -1,5 +1,7 @@
 from typing import Literal, Annotated
-
+from rich.spinner import Spinner
+from rich.live import Live
+from rich.console import Console
 from dotenv import load_dotenv
 from langchain_core.messages import HumanMessage, ToolMessage, SystemMessage
 from langchain_core.prompts import ChatPromptTemplate
@@ -7,14 +9,16 @@ from langchain_core.tools import tool
 from langchain_google_vertexai import ChatVertexAI
 from langgraph.graph import StateGraph, MessagesState
 from langgraph.prebuilt import ToolNode, InjectedState
+from doctor_happy.doctor_happy_chat import HappyChat
 
 load_dotenv()
 llm = ChatVertexAI(model_name="gemini-1.5-flash-001", temperature=0)
+console = Console()
 
 tool_name_mapping = {
     "sql_generator": "Sql Generator",
     "get_coolest_cities": "Coolest Cities",
-    "agent_gallery": "Agent Gallery",
+    "wukong": "Wukong",
 }
 
 
@@ -33,6 +37,14 @@ def sql_generator_agent(human_input: str):
     messages = prompt.format_messages()
     return llm.invoke(messages)
 
+@tool
+def doctor_happy_chat(state: Annotated[dict, InjectedState]):
+    """You are a knowledgeable doctor, and you need to generate the knowledge required by users according to their input"""
+    messages = state["messages"]
+    for message in messages:
+        if isinstance(message, HumanMessage):
+            happy_chat = HappyChat()
+            return happy_chat.process_user_input(message.content)
 
 @tool
 def sql_generator(state: Annotated[dict, InjectedState]):
@@ -97,10 +109,19 @@ def agent_supervisor_run(user_input: str):
     }
 
     all_response_messages = []
-    for chunk in app.stream(messages_maps, stream_mode="values"):
-        all_response_messages = chunk["messages"]
+    with Live(Spinner("pong"), transient=True, refresh_per_second=10):
+        try:
+           
+            for chunk in app.stream(messages_maps, stream_mode="values"):
+                 all_response_messages = chunk["messages"]
 
-    for message in all_response_messages:
-        if isinstance(message, ToolMessage):
-            return message.name, all_response_messages[-1].content
-    return None, all_response_messages[-1].content
+            for message in all_response_messages:
+                if isinstance(message, ToolMessage):
+                    return message.name, all_response_messages[-1].content
+            return None, all_response_messages[-1].content
+
+        except Exception as e:
+            console.print(f"[red]Error: {e}")
+            return "Oops! Something went wrong. Please try again."
+
+    

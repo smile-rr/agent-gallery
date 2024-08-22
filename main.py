@@ -5,13 +5,16 @@ from rich.console import Console
 from dotenv import load_dotenv
 from langchain_google_vertexai import ChatVertexAI
 import os
-from agent_supervisor.delegate_user_tasks import tool_name_mapping, agent_supervisor_run
+from agent_supervisor.delegate_user_tasks import tool_name_mapping,vertex_client, agent_supervisor_run
 
 CHATBOT_COLOR = "green"
 USER_COLOR = "blue"
 console = Console()
 load_dotenv()
-llm = ChatVertexAI(model_name="gemini-1.5-flash-001")
+
+llm = vertex_client()
+
+# llm = ChatVertexAI(model_name="gemini-1.5-flash-001")
 
 
 class ConsoleManager:
@@ -53,7 +56,6 @@ def get_chat_response(message: str) -> str:
     """Gets the chat response from the chatbot."""
     with Live(Spinner("pong"), transient=True, refresh_per_second=10):
         try:
-            # response = conversation.invoke(input=message, config={"configurable": {"session_id": "1"}}, )
             response = llm.invoke(message)
             return response.content
         except Exception as e:
@@ -63,16 +65,22 @@ def get_chat_response(message: str) -> str:
 
 def display_initial_greeting():
     """Displays the initial greeting message."""
+    agents_name = tool_name_mapping.values()
     initial_system_prompt = """
-    You are a chat assistant named as 'Happy'. from next input you will get the chat message from user. 
-    Firstly give a cool welcome message to user to start the interesting conversation. Please be brief.
+    You are a chat assistant named as 'Wukong'. from next input you will get the chat message from user. 
+    Firstly give a cool welcome message to user to start the interesting conversation related these agents{agents}. Please be brief.
     """
 
     # Send the system message
-    initial_response = get_chat_response(initial_system_prompt)
+    initial_response = get_chat_response(initial_system_prompt.format(agents=", ".join(get_agents_name_list())))
 
     # Print the initial response if needed
-    console.print(console_manager.format_message("Happy", initial_response, CHATBOT_COLOR))
+    console.print(console_manager.format_message("Wukong", initial_response, CHATBOT_COLOR))
+
+
+def get_agents_name_list():
+    """Returns the list of agent names."""
+    return [value for value in tool_name_mapping.values() if value != "Wukong"]
 
 
 if __name__ == '__main__':
@@ -84,14 +92,9 @@ if __name__ == '__main__':
             break
         tool_name, ai_message = call_agent_supervisor(user_input)
         if tool_name not in tool_name_mapping:
-            tool_name = "agent_gallery"
-            ai_message = """I am an agent gallery provided the following agent for you:
-    1. Sql generator
-    2. Coolest city
-Please type in your needs directly.
-I will automatically recognize your intention.
-And help you complete the task.
-                                 """
+            tool_name = "wukong"
+            agents_name = tool_name_mapping.values()
+            ai_message = llm.invoke("Sorry, I don't understand. Please try again or choose from the following agents: " + ", ".join(get_agents_name_list())).content
         console.print(console_manager.format_message(tool_name_mapping[tool_name], ai_message+"\n", CHATBOT_COLOR))
         # Sleep for 100 milliseconds
         time.sleep(0.1)

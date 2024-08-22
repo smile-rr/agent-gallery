@@ -10,24 +10,75 @@ from langchain_google_vertexai import ChatVertexAI
 from langgraph.graph import StateGraph, MessagesState
 from langgraph.prebuilt import ToolNode, InjectedState
 from doctor_happy.doctor_happy_chat import HappyChat
+from snap_reader.image_to_text import textExtractionAssistant
+import os
 
 load_dotenv()
-llm = ChatVertexAI(model_name="gemini-1.5-flash-001", temperature=0)
+
+def vertex_client():
+        # Initialize Vertex AI
+        project_id = os.getenv("PROJECT_ID")
+        location = os.getenv("LOCATION")
+        model_name = os.getenv("MODEL_NAME")
+        return ChatVertexAI(
+            model_name=model_name,
+            project=project_id,
+            location=location,
+            temperature=0,
+            max_output_tokens=256,
+            top_p=0.8,
+            top_k=40,
+            max_retries=3,
+        )
+
+llm = vertex_client()
 console = Console()
 
 tool_name_mapping = {
-    "sql_generator": "Sql Generator",
-    "get_coolest_cities": "Coolest Cities",
+    "load_content_from_confluence": "Sage",
+    "image_text_extraction_assistant": "Snap Reader",
+    "get_userinfo_from_workday": "Smart Bookmarts Assistant",
+    "generate_ai_prompts": "Prompts Expert",
+    "load_content_from_jira": "Jira Agent",
     "wukong": "Wukong",
 }
 
-
-def sql_generator_agent(human_input: str):
+def load_content_from_jira_agent(human_input: str):
     prompt = ChatPromptTemplate.from_messages(
         [
             SystemMessage(
                 content=(
-                    "You are a sql generator,"
+                    "Return jira-related information to the user"
+                    "Return the answer directly, do not explain, and do not give any hints other than the answer."
+                )
+            ),
+            HumanMessage(content=human_input)
+        ]
+    )
+    messages = prompt.format_messages()
+    return llm.invoke(messages)
+
+def generate_ai_prompts_agent(human_input: str):
+    prompt = ChatPromptTemplate.from_messages(
+        [
+            SystemMessage(
+                content=(
+                    "Generate professional AI prompts for users according to their needs. If you cannot provide them, return some professional knowledge of the prompts to users."
+                    "Return the answer directly, do not explain, and do not give any hints other than the answer."
+                )
+            ),
+            HumanMessage(content=human_input)
+        ]
+    )
+    messages = prompt.format_messages()
+    return llm.invoke(messages)
+
+def get_userinfo_from_workday_agent(human_input: str):
+    prompt = ChatPromptTemplate.from_messages(
+        [
+            SystemMessage(
+                content=(
+                    "Get some information from workday"
                     "Return the answer directly, do not explain, and do not give any hints other than the answer."
                 )
             ),
@@ -38,31 +89,50 @@ def sql_generator_agent(human_input: str):
     return llm.invoke(messages)
 
 @tool
-def doctor_happy_chat(state: Annotated[dict, InjectedState]):
-    """You are a knowledgeable doctor, and you need to generate the knowledge required by users according to their input"""
+def load_content_from_jira(state: Annotated[dict, InjectedState]):
+    """Return jira-related information to the user"""
+    messages = state["messages"]
+    for message in messages:
+        if isinstance(message, HumanMessage):
+            return load_content_from_jira_agent(message.content)
+
+@tool
+def generate_ai_prompts(state: Annotated[dict, InjectedState]):
+    """Generate professional AI prompts for users according to their needs. If you cannot provide them, return some professional knowledge of the prompts to users."""
+    messages = state["messages"]
+    for message in messages:
+        if isinstance(message, HumanMessage):
+            return generate_ai_prompts_agent(message.content)
+
+
+@tool
+def load_content_from_confluence(state: Annotated[dict, InjectedState]):
+    """Searches content from Confluence, loads content from the found pages, and generates a response."""
     messages = state["messages"]
     for message in messages:
         if isinstance(message, HumanMessage):
             happy_chat = HappyChat()
             return happy_chat.process_user_input(message.content)
-
+        
 @tool
-def sql_generator(state: Annotated[dict, InjectedState]):
-    """Call to get sql"""
+def image_text_extraction_assistant(state: Annotated[dict, InjectedState]):
+    """You are an image text recognition assistant, you can get the raw text from given immage. The recognized text needs to be exactly the same as the text in the image."""
     messages = state["messages"]
     for message in messages:
         if isinstance(message, HumanMessage):
-            return sql_generator_agent(message.content)
-
+            return textExtractionAssistant(message.content)
 
 @tool
-def get_coolest_cities(state: Annotated[dict, InjectedState]):
-    """Get a list of coolest cities"""
-    return "nyc, sf"
+def get_userinfo_from_workday(state: Annotated[dict, InjectedState]):
+    """Get some information from workday"""
+    messages = state["messages"]
+    for message in messages:
+        if isinstance(message, HumanMessage):
+            return get_userinfo_from_workday_agent(message.content)
 
 
 def agent_supervisor_run(user_input: str):
-    tools = [sql_generator, get_coolest_cities]
+    tools = [load_content_from_confluence,image_text_extraction_assistant,get_userinfo_from_workday,generate_ai_prompts,load_content_from_jira]
     tool_node = ToolNode(tools)
 
     model_with_tools = llm.bind_tools(tools)

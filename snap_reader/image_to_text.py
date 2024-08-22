@@ -7,7 +7,7 @@ import vertexai
 from langchain_core.messages import HumanMessage
 from vertexai.generative_models import GenerativeModel, ChatSession, Part, Image
 
-load_dotenv(".env.local")
+load_dotenv(".env")
 
 # Initialize Vertex AI
 project_id = os.getenv("PROJECT_ID")
@@ -71,26 +71,29 @@ def textExtractionAssistant(input: str) -> str:
     return response.text
 
 
-# Initial greeting from Vertex AI
-initial_prompt = """
-You are a Text Extraction Assistant named as 'Happy', you can get the raw text from given immage. The recognized text needs to be exactly the same as the text in the image. 
-From next input you will get the chat message from user. Tell user you need a local image path.
-firstly give a cool welcome message to user to start the interesting conversation. pls be in short.
-"""
-initial_response = print_markdown_response_with_spinner(initial_prompt)
+# # Initial greeting from Vertex AI
+# initial_prompt = """
+# You are a Text Extraction Assistant named as 'Happy', you can get the raw text from given immage. The recognized text needs to be exactly the same as the text in the image. 
+# From next input you will get the chat message from user. Tell user you need a local image path.
+# firstly give a cool welcome message to user to start the interesting conversation. pls be in short.
+# """
+# initial_response = print_markdown_response_with_spinner(initial_prompt)
 
-# Print the initial response if needed
-print(format_message("Happy", initial_response, CHATBOT_COLOR))
+# # Print the initial response if needed
+# print(format_message("Happy", initial_response, CHATBOT_COLOR))
 
 # Continuously prompt the user for input
-while True:
-    user_input = get_user_input("You: ")
-    if user_input.lower() in ["exit", "quit"]:
-        break
-    response = checkUserInputAndGetText(user_input)
-    if 'check pass' in response:
-        response = textExtractionAssistant(user_input)
-        print(format_message("Test Content", "\n" + response, CHATBOT_COLOR))
-        break
-    # print(format_message("You", user_input, USER_COLOR))
-    print(format_message("Happy", response, CHATBOT_COLOR))
+
+
+if __name__ == '__main__':
+    while True:
+        user_input = get_user_input("You: ")
+        if user_input.lower() in ["exit", "quit"]:
+            break
+        response = checkUserInputAndGetText(user_input)
+        if 'check pass' in response:
+            response = textExtractionAssistant(user_input)
+            print(format_message("Test Content", "\n" + response, CHATBOT_COLOR))
+            break
+        # print(format_message("You", user_input, USER_COLOR))
+        print(format_message("Happy", response, CHATBOT_COLOR))
